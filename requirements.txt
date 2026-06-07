@@ -1,0 +1,9 @@
+# Amazon Review Insight 依赖
+# 核心依赖
+# 暂无外部依赖，后续可添加 deepseek-api 等
+
+# 可选：用于环境变量管理
+# python-dotenv
+
+# 测试依赖
+pytest>=7.0.0
