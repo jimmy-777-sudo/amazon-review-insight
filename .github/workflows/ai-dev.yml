@@ -17,21 +17,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: |
-            请读取 Issue #${{ github.event.issue.number }} 的需求描述，
-            完成以下步骤：
+      - name: 安装 OpenCode
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/main/install.sh | bash
+          echo "$HOME/.opencode/bin" >> $GITHUB_PATH
 
-            1. 理解需求，确认所有输入输出明确
-            2. 实现代码（放在合适的文件里）
-            3. 编写对应的测试
-            4. 运行测试，确保全部通过
-            5. 如果测试失败，分析原因并修复，最多尝试 3 轮
-            6. 更新 README.md（如果是新功能）
-            7. 所有改动提交到一个新分支，分支名格式：feature/${{ github.event.issue.number }}-<简短描述>
-            8. 创建一个 Pull Request，PR 描述里写清楚改了什么、怎么测试
+      - name: 配置 DeepSeek
+        run: |
+          mkdir -p ~/.opencode
+          cat > ~/.opencode/config.json << 'CONFIG'
+          {
+            "provider": {
+              "type": "openai-compatible",
+              "base_url": "https://api.deepseek.com",
+              "api_key_env": "DEEPSEEK_API_KEY",
+              "default_model": "deepseek-chat"
+            },
+            "permissions": {
+              "bash": "allow",
+              "files": "allow",
+              "network": "allow"
+            }
+          }
+          CONFIG
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
-            PR 标题格式：[#${{ github.event.issue.number }}] <功能概述>
-          claude_args: "--max-turns 20"
+      - name: AI 读取 Issue 并实现
+        run: |
+          opencode run "
+          请读取 Issue #${{ github.event.issue.number }} 的需求描述，完成以下步骤：
+
+          1. 理解需求，确认所有输入输出明确
+          2. 实现代码（根据项目技术栈选择合适的文件结构）
+          3. 编写对应的测试代码
+          4. 运行测试，确保全部通过
+          5. 如果测试失败，分析原因并自行修复，最多尝试 3 轮
+          6. 如果是新功能，更新 README.md
+          7. 所有改动提交到一个新分支，命名：feature/${{ github.event.issue.number }}-功能简述
+          8. 创建 Pull Request，在 PR 描述中用中文写明：改了什么、怎么测试、注意事项
+
+          PR 标题格式：[#${{ github.event.issue.number }}] 功能概述
+          " --max-turns 25
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

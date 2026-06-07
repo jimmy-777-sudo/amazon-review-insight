@@ -15,15 +15,37 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: |
-            审查这个 PR 的代码变更，从以下维度给出反馈：
-            - 代码逻辑是否正确
-            - 是否有安全漏洞（SQL注入、XSS、密钥泄露等）
-            - 错误处理是否充分
-            - 是否有明显的性能问题
+      - name: 安装 OpenCode
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/main/install.sh | bash
+          echo "$HOME/.opencode/bin" >> $GITHUB_PATH
 
-            用中文输出审查意见，直接评论在这个 PR 上。
-          claude_args: "--max-turns 5"
+      - name: 配置 DeepSeek
+        run: |
+          mkdir -p ~/.opencode
+          cat > ~/.opencode/config.json << 'CONFIG'
+          {
+            "provider": {
+              "type": "openai-compatible",
+              "base_url": "https://api.deepseek.com",
+              "api_key_env": "DEEPSEEK_API_KEY",
+              "default_model": "deepseek-chat"
+            }
+          }
+          CONFIG
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+      - name: AI 审查代码
+        run: |
+          opencode run "
+          审查这个 PR 的代码变更，从以下维度给出审查意见：
+          - 代码逻辑是否正确，有无明显的 bug
+          - 是否有安全漏洞（SQL注入、XSS、密钥泄露、命令注入等）
+          - 错误处理是否充分
+          - 是否有明显的性能问题
+
+          用中文输出审查意见。每条意见要注明具体文件和行号。
+          " --max-turns 5
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
