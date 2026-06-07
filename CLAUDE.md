@@ -1,22 +1,22 @@
 # GitHub 应用开发 — AI 全自动流水线项目
 
-## 项目目标
+## 你是谁，在做什么
 
-搭建一套 GitHub Actions + AI Agent 的全自动开发流水线：用户在 GitHub Issue 中提需求 → AI 自动写代码、写测试、创建 PR → 用户审核合并。
+你是跨境电商卖家 + AI 重度用户，搭建了一套 GitHub Actions + DeepSeek API 的全自动开发流水线。
 
-**核心理念**：你不需要写代码，你只需要提清楚需求。
+**核心理念**：你不需要写代码，只需要在 GitHub Issue 里用中文描述需求，打上 `ai-build` 标签，AI 自动写代码、写测试、提交 PR。
 
-## 技术栈
+## 当前项目状态
 
-| 组件 | 选型 | 原因 |
-|------|------|------|
-| AI 引擎 | 自研 Python Agent (agent.py) | 直接调用 DeepSeek API，无 CLI 兼容问题 |
-| AI 模型 | DeepSeek API (deepseek-chat) | 国产、便宜、OpenAI 兼容协议 |
-| CI/CD | GitHub Actions | 免费、与仓库深度绑定 |
-| 触发方式 | Issue 标签 `ai-build` | 打标签即触发，直观可控 |
-| 代码审查 | review.yml (待实现) | PR 自动触发 AI 审查 |
+| 项目 | 状态 |
+|------|------|
+| 流水线 | ✅ 已跑通，Issue #1 → PR #2 成功 |
+| 仓库 | https://github.com/jimmy-777-sudo/amazon-review-insight |
+| 本地路径 | D:\GitHub应用开发\amazon-review-insight |
+| AI 模型 | DeepSeek API (deepseek-chat) |
+| Secret | `DEEPSEEK_API_KEY` 已配置 |
 
-## 流水线架构
+## 技术架构
 
 ```
 用户创建 Issue + 打 ai-build 标签
@@ -30,59 +30,42 @@ GitHub Actions 触发 (ai-dev.yml)
   │   ├─ 读取仓库文件结构
   │   ├─ 调用 DeepSeek API 分析需求
   │   ├─ 解析 AI 返回的 JSON (文件操作列表)
-  │   ├─ 创建/修改文件
+  │   ├─ 创建/修改/删除文件
   │   ├─ 尝试运行测试
-  │   └─ git commit + push + gh pr create
-  └─ PR 出现 → 人工 Review → Merge
+  │   └─ git commit + push -f + gh pr create
+  └─ PR 出现在 GitHub → 人工 Review → Merge
 ```
 
-## 文件结构
+## 开发能力边界
 
-```
-amazon-review-insight/
-├── .github/workflows/
-│   ├── ai-dev.yml          # 自动开发流水线
-│   └── review.yml          # 自动代码审查 (WIP)
-├── agent.py                # AI Agent 核心脚本
-├── .gitignore
-├── README.md
-└── CLAUDE.md               # 项目知识库
-```
+| 能做的 | 需额外步骤的 |
+|--------|------------|
+| Python 脚本/自动化 | iOS APP（需 Mac + Xcode 本地编译）|
+| Streamlit/Gradio Web 应用 | Windows EXE（需本地 PyInstaller 打包）|
+| HTML/CSS/JS 前端 | Android APK（需 Android SDK 本地编译）|
+| FastAPI 后端 | 需要 GPU 的程序 |
+| Electron 桌面应用 | |
+| Chrome 浏览器插件 | |
+| Docker 镜像 | |
 
-## 日常操作流程
+## 客户交付方式（三级递进）
 
-1. 打开 Issues: https://github.com/jimmy-777-sudo/amazon-review-insight/issues
-2. 创建 New Issue，用中文描述需求
-3. 右侧 Labels → 打上 `ai-build`
-4. 等 2-5 分钟，PR 自动出现
-5. Review 代码 → Merge 或评论要求修改
+| Level | 方式 | 客户操作 | 适用场景 |
+|-------|------|---------|---------|
+| 1 | CLI 命令行 | `python app.py` | 你自己用 |
+| 2 | Streamlit Web | 浏览器打开网址 | 发给客户试用 |
+| 3 | 独立应用 | 双击 EXE/APP | 商业化产品 |
 
-## 新项目复制方法
+**推荐起步方式**：AI 生成 Streamlit 界面 → 部署到 Streamlit Cloud（免费）→ 客户打开链接即用。
 
-```bash
-cp agent.py .github/workflows/ai-dev.yml .gitignore 新项目/
-# 每个新仓库需要：
-# Settings → Secrets → Actions → 添加 DEEPSEEK_API_KEY
-```
+## 这套流程可以无限复用
 
-## 调试
+需求描述 → Issue → 打标签 → AI 写代码 → PR → Merge。
+换项目只要改 README 和 agent.py 里的 prompt。
 
-查看流水线日志：
-```bash
-gh run list --limit 5
-gh run view <run-id> --log-failed
-```
+## 后续待办
 
-## 已知限制
-
-- DeepSeek 复杂多文件操作不如 Claude Opus
-- Agent 目前一轮对话，不支持自动修复测试失败
-- 网络不稳定时需重试 push
-- JSON 解析依赖 AI 输出格式规范
-
-## 后续优化
-
-- 多轮对话：测试失败自动修复
-- 支持多模型切换
-- Issue 模板标准化
-- 自动更新 CHANGELOG
+- [ ] Review 并 Merge PR #2（第一个 AI 生成的功能）
+- [ ] 配置 review.yml 自动代码审查
+- [ ] 创建 Issue 模板（.github/ISSUE_TEMPLATE/）
+- [ ] 写一篇自媒体文章：跨境电商卖家如何用 AI 自动化开发工具
