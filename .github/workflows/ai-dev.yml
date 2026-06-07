@@ -2,11 +2,13 @@ name: AI 自动开发
 
 on:
   issues:
-    types: [labeled]
+    types: [opened, labeled]
 
 jobs:
   build:
-    if: github.event.label.name == 'ai-build'
+    if: |
+      (github.event.action == 'labeled' && github.event.label.name == 'ai-build') ||
+      (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'ai-build'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
