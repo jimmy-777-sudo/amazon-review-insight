@@ -1,0 +1,29 @@
+name: AI 代码审查
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            审查这个 PR 的代码变更，从以下维度给出反馈：
+            - 代码逻辑是否正确
+            - 是否有安全漏洞（SQL注入、XSS、密钥泄露等）
+            - 错误处理是否充分
+            - 是否有明显的性能问题
+
+            用中文输出审查意见，直接评论在这个 PR 上。
+          claude_args: "--max-turns 5"
