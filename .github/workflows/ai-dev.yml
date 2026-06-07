@@ -47,20 +47,19 @@ jobs:
 
       - name: AI 读取 Issue 并实现
         run: |
-          printf '%s\n' \
-            "请读取 Issue #${{ github.event.issue.number }} 的需求描述，完成以下步骤：" \
-            "" \
-            "1. 理解需求，确认所有输入输出明确" \
-            "2. 实现代码（根据项目技术栈选择合适的文件结构）" \
-            "3. 编写对应的测试代码" \
-            "4. 运行测试，确保全部通过" \
-            "5. 如果测试失败，分析原因并自行修复，最多尝试 3 轮" \
-            "6. 如果是新功能，更新 README.md" \
-            "7. 所有改动提交到一个新分支 feature/${{ github.event.issue.number }}-功能简述" \
-            "8. 创建 Pull Request，PR 描述用中文写明改了什么、怎么测试、注意事项" \
-            "" \
-            "PR 标题格式：[#${{ github.event.issue.number }}] 功能概述" \
-            > /tmp/prompt.txt
-          opencode run "$(cat /tmp/prompt.txt)" --max-turns 25
+          cat > /tmp/prompt.txt << 'ENDPROMPT'
+          请读取 Issue 的需求描述，完成以下步骤：
+
+          1. 理解需求，确认所有输入输出明确
+          2. 实现代码（根据项目技术栈选择合适的文件结构）
+          3. 编写对应的测试代码
+          4. 运行测试，确保全部通过
+          5. 如果测试失败，分析原因并自行修复，最多尝试 3 轮
+          6. 如果是新功能，更新 README.md
+          7. 所有改动提交到一个新分支，命名 feature/issue-功能简述
+          8. 创建 Pull Request，PR 描述用中文写明改了什么、怎么测试、注意事项
+          ENDPROMPT
+          opencode --command "$(cat /tmp/prompt.txt)" --max-turns 25 --dangerously-skip-permissions
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
