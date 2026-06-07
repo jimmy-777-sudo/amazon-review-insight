@@ -92,8 +92,11 @@ def create_branch_pr(branch_name, title, body):
     run_cmd('git config user.name "AI Agent"')
     run_cmd('git config user.email "ai-agent@github.com"')
 
-    # 创建分支
-    run_cmd(f"git checkout -b {branch_name}")
+    # 删除可能存在的同名远程分支
+    run_cmd(f"git push origin --delete {branch_name} 2>/dev/null || true")
+
+    # 创建新分支（从 main 开始）
+    run_cmd(f"git checkout -B {branch_name}")
 
     # 添加所有改动
     run_cmd("git add -A")
@@ -104,8 +107,8 @@ def create_branch_pr(branch_name, title, body):
         print(f"commit failed: {err}")
         return None
 
-    # 推送
-    rc, out, err = run_cmd(f"git push origin {branch_name}")
+    # 强制推送（覆盖远程旧分支）
+    rc, out, err = run_cmd(f"git push -f origin {branch_name}")
     if rc != 0:
         print(f"push failed: {err}")
         return None
