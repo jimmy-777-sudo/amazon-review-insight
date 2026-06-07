@@ -21,8 +21,8 @@ jobs:
 
       - name: 安装 OpenCode
         run: |
-          curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/main/install.sh | bash
-          echo "$HOME/.opencode/bin" >> $GITHUB_PATH
+          npm install -g opencode-ai
+          echo "$(npm root -g)/opencode-ai/bin" >> $GITHUB_PATH 2>/dev/null || true
 
       - name: 配置 DeepSeek
         run: |
