@@ -1,7 +1,7 @@
 """
 卖家精灵 MCP 客户端 — JSON-RPC over HTTP
 端点: https://mcp.sellersprite.com/mcp
-传输: streamableHttp
+传输: streamableHttp (基于实际 API 测试验证)
 """
 import json
 import time
@@ -18,7 +18,11 @@ class SellerspriteClient:
 
     MCP_URL = "https://mcp.sellersprite.com/mcp"
     RATE_LIMIT = 40  # 每分钟 40 次
-    INIT_TIMEOUT = 30
+
+    HEADERS_TEMPLATE = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -26,7 +30,7 @@ class SellerspriteClient:
         self._last_request_time = 0.0
         self._min_interval = 60.0 / self.RATE_LIMIT
         self._tools: Dict[str, dict] = {}
-        self._session_id: Optional[str] = None
+        self._initialized = False
 
     def _rate_limit(self):
         elapsed = time.time() - self._last_request_time
@@ -40,6 +44,9 @@ class SellerspriteClient:
     def _rpc_call(self, method: str, params: dict = None) -> dict:
         """发送 JSON-RPC 请求"""
         self._rate_limit()
+
+        headers = {**self.HEADERS_TEMPLATE, "secret-key": self.api_key}
+
         payload = json.dumps({
             "jsonrpc": "2.0",
             "id": self._next_id(),
@@ -47,23 +54,13 @@ class SellerspriteClient:
             "params": params or {}
         }).encode("utf-8")
 
-        headers = {
-            "Content-Type": "application/json",
-            "secret-key": self.api_key,
-        }
-        if self._session_id:
-            headers["Mcp-Session-Id"] = self._session_id
-
         req = urllib.request.Request(
             self.MCP_URL, data=payload, headers=headers, method="POST"
         )
-
         self._last_request_time = time.time()
+
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                sid = resp.headers.get("Mcp-Session-Id")
-                if sid:
-                    self._session_id = sid
                 body = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="replace")
@@ -76,20 +73,22 @@ class SellerspriteClient:
         return body.get("result", body)
 
     def initialize(self) -> dict:
-        """MCP 握手 — 获取服务端能力和 session"""
+        """MCP 握手"""
         result = self._rpc_call("initialize", {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": "2025-03-26",
             "capabilities": {},
             "clientInfo": {
                 "name": "amazon-review-insight",
                 "version": "1.0.0"
             }
         })
-        self._rpc_call("notifications/initialized", {})
+        self._initialized = True
         return result
 
     def discover_tools(self) -> List[dict]:
         """发现可用工具列表"""
+        if not self._initialized:
+            self.initialize()
         result = self._rpc_call("tools/list", {})
         tools = result.get("tools", [])
         for tool in tools:
@@ -106,84 +105,117 @@ class SellerspriteClient:
         texts = []
         for item in content:
             if item.get("type") == "text":
-                texts.append(item["text"])
+                text = item["text"]
+                # 尝试解析为 JSON
+                try:
+                    parsed = json.loads(text)
+                    texts.append(parsed)
+                except (json.JSONDecodeError, TypeError):
+                    texts.append(text)
             elif item.get("type") == "resource":
-                texts.append(json.dumps(item.get("resource", {}), ensure_ascii=False))
-        return "\n".join(texts) if texts else result
+                texts.append(item.get("resource", {}))
+        return texts[0] if len(texts) == 1 else texts
 
     def list_tool_names(self) -> List[str]:
-        return list(self._tools.keys())
+        return list(self._tools.keys()) if self._tools else []
 
-    def get_product_info(self, asin: str, site: str = "amazon.com") -> Optional[dict]:
-        """获取产品详情（自动匹配 MCP 工具）"""
-        candidates = ["get_asin_info", "product_info", "product_detail",
-                       "asin_detail", "get_product", "asin_info"]
+    # ---- 业务方法 ----
 
-        for name in candidates:
-            if name in self._tools:
-                raw = self.call_tool(name, {"asin": asin, "site": site})
-                return self._parse_json(raw)
-
-        available = self.list_tool_names()
-        logger.warning(f"未找到产品详情工具，可用工具: {available}")
-        return {"error": "no_matching_tool", "available_tools": available}
-
-    def get_reviews(self, asin: str, site: str = "amazon.com",
-                    max_reviews: int = 100) -> List[str]:
-        """获取评论列表（自动匹配 MCP 工具）"""
-        candidates = ["get_reviews", "review_list", "product_reviews",
-                       "asin_reviews", "get_product_reviews"]
-
-        for name in candidates:
-            if name in self._tools:
-                raw = self.call_tool(name, {
-                    "asin": asin,
-                    "site": site,
-                    "star_rating": "1,2,3",
-                    "page_size": min(max_reviews, 100),
-                })
-                return self._parse_reviews(raw)
-
-        available = self.list_tool_names()
-        logger.warning(f"未找到评论工具，可用工具: {available}")
-        return []
-
-    def get_keyword_data(self, asin: str, site: str = "amazon.com") -> Optional[dict]:
-        """获取关键词数据"""
-        candidates = ["keyword_research", "keyword_asin", "asin_keywords",
-                       "traffic_keyword", "keyword_analysis"]
-
-        for name in candidates:
-            if name in self._tools:
-                raw = self.call_tool(name, {"asin": asin, "site": site})
-                return self._parse_json(raw)
-
+    def get_product_info(self, asin: str, marketplace: str = "US") -> Optional[dict]:
+        """获取产品详情（asin_detail 工具）"""
+        result = self.call_tool("asin_detail", {
+            "marketplace": marketplace,
+            "asin": asin
+        })
+        if isinstance(result, dict):
+            data = result.get("data", result)
+            return data
         return None
 
-    @staticmethod
-    def _parse_json(raw: str) -> dict:
-        if isinstance(raw, dict):
-            return raw
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return {"raw": raw}
+    def get_reviews(self, asin: str, marketplace: str = "US",
+                    max_reviews: int = 100, star_ratings: List[str] = None) -> List[dict]:
+        """
+        获取评论列表（review 工具）
 
-    @staticmethod
-    def _parse_reviews(raw: str) -> List[str]:
-        data = SellerspriteClient._parse_json(raw)
-        if isinstance(data, list):
-            return data if all(isinstance(i, str) for i in data) else [
-                str(i) for i in data
-            ]
-        if isinstance(data, dict):
-            for key in ("reviews", "items", "data", "list"):
-                if key in data and isinstance(data[key], list):
-                    items = data[key]
-                    return [
-                        item.get("content") or item.get("text") or item.get("body") or str(item)
-                        for item in items
-                    ]
-        if isinstance(raw, str):
-            return [raw]
-        return []
+        返回评论列表，每条包含: star, title, content, reviewer, date 等
+        """
+        if star_ratings is None:
+            star_ratings = ["1", "2", "3"]
+
+        all_items = []
+        page = 1
+        size = min(max_reviews, 50)
+
+        while True:
+            result = self.call_tool("review", {
+                "marketplace": marketplace,
+                "asin": asin,
+                "starList": star_ratings,
+                "page": page,
+                "size": size
+            })
+
+            data = result.get("data", result) if isinstance(result, dict) else {}
+            items = data.get("items", [])
+            total = data.get("total", 0)
+            pages = data.get("pages", 0)
+
+            if not items:
+                break
+
+            all_items.extend(items)
+
+            if (len(all_items) >= max_reviews or
+                    len(all_items) >= total or
+                    page >= pages):
+                break
+
+            page += 1
+
+        return all_items[:max_reviews]
+
+    def get_review_texts(self, asin: str, marketplace: str = "US",
+                         max_reviews: int = 100) -> List[str]:
+        """获取评论纯文本列表（方便 AI 分析）"""
+        items = self.get_reviews(asin, marketplace, max_reviews)
+        texts = []
+        for item in items:
+            content = item.get("content") or item.get("title") or ""
+            title = item.get("title") or ""
+            star = item.get("star", "")
+            if title and title != content:
+                parts = [f"[{star}星] {title}", content]
+            else:
+                parts = [f"[{star}星] {content}"]
+            texts.append(" | ".join(p for p in parts if p))
+        return texts
+
+    def get_keyword_data(self, asin: str, marketplace: str = "US") -> Optional[dict]:
+        """获取流量关键词数据"""
+        result = self.call_tool("traffic_keyword_stat", {
+            "marketplace": marketplace,
+            "asin": asin
+        })
+        if isinstance(result, dict):
+            return result.get("data", result)
+        return None
+
+    def get_sales_trend(self, asin: str, marketplace: str = "US") -> Optional[dict]:
+        """获取销量趋势"""
+        result = self.call_tool("asin_sales_trend", {
+            "marketplace": marketplace,
+            "asin": asin
+        })
+        if isinstance(result, dict):
+            return result.get("data", result)
+        return None
+
+    def get_keepa_info(self, asin: str, marketplace: str = "US") -> Optional[dict]:
+        """获取 Keepa 商品趋势数据"""
+        result = self.call_tool("keepa_info", {
+            "marketplace": marketplace,
+            "asin": asin
+        })
+        if isinstance(result, dict):
+            return result.get("data", result)
+        return None

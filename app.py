@@ -5,6 +5,23 @@ import time
 from sellersprite_client import SellerspriteClient
 from analyzer import ReviewAnalyzer
 
+# 站点 → 卖家精灵 marketplace 编码
+SITE_TO_MARKETPLACE = {
+    "amazon.com": "US",
+    "amazon.co.uk": "UK",
+    "amazon.de": "DE",
+    "amazon.fr": "FR",
+    "amazon.it": "IT",
+    "amazon.es": "ES",
+    "amazon.ca": "CA",
+    "amazon.com.au": "AU",
+    "amazon.co.jp": "JP",
+    "amazon.in": "IN",
+    "amazon.com.mx": "MX",
+    "amazon.com.br": "BR",
+    "amazon.ae": "AE",
+}
+
 st.set_page_config(
     page_title="竞品评论智能分析工具",
     page_icon="\U0001f50d",
@@ -12,7 +29,7 @@ st.set_page_config(
 )
 
 st.title("\U0001f50d 竞品评论智能分析工具")
-st.markdown("输入竞品 ASIN，通过卖家精灵 MCP 拉取评论，AI 自动分析痛点并输出结构化报告。")
+st.markdown("输入竞品 ASIN，通过卖家精灵 MCP 拉取差评，AI 自动分析痛点并输出结构化报告。")
 
 # ---- Sidebar ----
 with st.sidebar:
@@ -32,27 +49,26 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 使用说明")
     st.markdown("""
-    1. 配置 API Key
+    1. 填入两个 API Key
     2. 输入竞品 ASIN
-    3. 选择站点
+    3. 选择亚马逊站点
     4. 点击「开始分析」
-    5. 下载报告
+    5. 查看报告，支持下载
     """)
     st.markdown("---")
-    st.caption("卖家精灵 MCP: mcp.sellersprite.com")
+    st.caption("数据源: 卖家精灵 MCP")
 
 # ---- Main ----
 col1, col2, col3 = st.columns([3, 2, 1])
 with col1:
     asin = st.text_input(
-        "竞品 ASIN", placeholder="例如: B08N5WRWNW",
-        help="输入亚马逊标准识别码"
+        "竞品 ASIN", placeholder="例如: B0BSHF7WHW",
+        help="输入亚马逊标准识别码 (ASIN)"
     )
 with col2:
     site = st.selectbox(
         "亚马逊站点",
-        options=["amazon.com", "amazon.co.uk", "amazon.de", "amazon.fr",
-                 "amazon.it", "amazon.es", "amazon.ca", "amazon.com.au"],
+        options=list(SITE_TO_MARKETPLACE.keys()),
         index=0
     )
 with col3:
@@ -61,7 +77,7 @@ with col3:
     )
 
 with st.expander("手动粘贴评论样本（可选）"):
-    st.markdown("如果 MCP 未直接返回评论内容，可手动粘贴 1-3 星差评，每行一条。")
+    st.markdown("如果 MCP 返回的评论不够，可手动粘贴 1-3 星差评，每行一条。")
     manual_reviews = st.text_area(
         "评论内容", height=200,
         placeholder="每条评论一行，支持中英文"
@@ -79,22 +95,19 @@ if st.button("开始分析", type="primary", use_container_width=True):
         st.error("请在侧边栏填写 DeepSeek API Key")
         st.stop()
 
+    marketplace = SITE_TO_MARKETPLACE[site]
     progress_bar = st.progress(0, text="初始化...")
     status_text = st.empty()
 
     try:
-        # 1. 连接卖家精灵 MCP
+        # 1. 连接 MCP
         status_text.text("正在连接卖家精灵 MCP...")
         progress_bar.progress(10, text="连接 MCP 中...")
 
         client = SellerspriteClient(api_key=sellersprite_api_key)
         client.initialize()
         tools = client.discover_tools()
-
-        tool_names = client.list_tool_names()
-        status_text.text(
-            f"MCP 已连接，发现 {len(tools)} 个可用工具: {', '.join(tool_names[:8])}"
-        )
+        status_text.text(f"MCP 已连接 ({len(tools)} 个工具可用)")
 
         # 2. 获取评论
         status_text.text("正在获取评论数据...")
@@ -104,16 +117,16 @@ if st.button("开始分析", type="primary", use_container_width=True):
             review_texts = [r.strip() for r in manual_reviews.split("\n") if r.strip()]
             status_text.text(f"已加载 {len(review_texts)} 条手动评论")
         else:
-            review_texts = client.get_reviews(asin, site, max_reviews=max_reviews)
+            review_texts = client.get_review_texts(asin, marketplace, max_reviews=max_reviews)
             if not review_texts:
-                product_info = client.get_product_info(asin, site)
-                if product_info and "error" not in product_info:
-                    st.info("已获取产品信息，但未找到评论数据。请在「手动粘贴评论样本」区域粘贴差评内容。")
-                    st.json(product_info)
+                # 尝试获取产品信息
+                product = client.get_product_info(asin, marketplace)
+                if product and "error" not in product:
+                    title = product.get("title", "N/A")
+                    st.info(f"已找到产品「{title}」，但暂无差评数据。请在下方手动粘贴差评内容。")
+                    st.json({k: product[k] for k in ["asin", "title", "price", "rating", "brand"] if k in product})
                 else:
-                    available = product_info.get("available_tools", []) if isinstance(product_info, dict) else []
-                    st.warning("卖家精灵 MCP 当前环境暂未返回评论数据。")
-                    st.info("可用工具：" + ", ".join(available) if available else "请手动粘贴评论样本。")
+                    st.warning("该 ASIN 暂无评论数据，请手动粘贴评论样本。")
                 st.stop()
             status_text.text(f"成功获取 {len(review_texts)} 条评论")
 
@@ -177,7 +190,7 @@ if st.button("开始分析", type="primary", use_container_width=True):
                 action = imp.get("action", "")
                 st.markdown(f"**{i}. [{priority}] {suggestion}**")
                 if action:
-                    st.markdown(f"   {action}")
+                    st.markdown(f"  {action}")
         else:
             st.write(report.get("improvements_text", "暂无数据"))
 
@@ -192,18 +205,17 @@ if st.button("开始分析", type="primary", use_container_width=True):
         else:
             st.write(report.get("review_summary_text", "暂无数据"))
 
-        # 下载按钮 - 修复为正确的 JSON 格式
-        report_json = json.dumps(report, ensure_ascii=False, indent=2)
+        # 下载
         st.download_button(
             label="下载报告 (JSON)",
-            data=report_json,
-            file_name=f"review_analysis_{asin}_{site}.json",
+            data=json.dumps(report, ensure_ascii=False, indent=2),
+            file_name=f"review_analysis_{asin}.json",
             mime="application/json"
         )
 
     except ConnectionError as e:
         st.error(f"MCP 连接失败: {e}")
-        st.info("请检查卖家精灵 MCP Key 是否正确，或稍后重试。")
+        st.info("请检查卖家精灵 MCP Key 是否正确。")
     except Exception as e:
         st.error(f"分析过程出错: {e}")
     finally:
