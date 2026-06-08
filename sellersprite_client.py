@@ -1,121 +1,189 @@
-import requests
+"""
+卖家精灵 MCP 客户端 — JSON-RPC over HTTP
+端点: https://mcp.sellersprite.com/mcp
+传输: streamableHttp
+"""
+import json
 import time
 import logging
-from typing import List, Optional
+import urllib.request
+import urllib.error
+from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+
 class SellerspriteClient:
-    """
-    卖家精灵 API 封装
-    文档参考：https://open.sellersprite.com/
-    """
-    
-    BASE_URL = "https://open.sellersprite.com/api/v1"
+    """卖家精灵 MCP JSON-RPC 客户端"""
+
+    MCP_URL = "https://mcp.sellersprite.com/mcp"
     RATE_LIMIT = 40  # 每分钟 40 次
-    
+    INIT_TIMEOUT = 30
+
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self._last_request_time = 0
-        self._min_interval = 60.0 / self.RATE_LIMIT  # 每次请求最小间隔（秒）
-    
+        self._request_id = 0
+        self._last_request_time = 0.0
+        self._min_interval = 60.0 / self.RATE_LIMIT
+        self._tools: Dict[str, dict] = {}
+        self._session_id: Optional[str] = None
+
     def _rate_limit(self):
-        """遵守 API 频率限制"""
         elapsed = time.time() - self._last_request_time
         if elapsed < self._min_interval:
             time.sleep(self._min_interval - elapsed)
-        self._last_request_time = time.time()
-    
-    def _request(self, endpoint: str, params: dict = None) -> dict:
-        """通用请求方法"""
+
+    def _next_id(self) -> int:
+        self._request_id += 1
+        return self._request_id
+
+    def _rpc_call(self, method: str, params: dict = None) -> dict:
+        """发送 JSON-RPC 请求"""
         self._rate_limit()
-        url = f"{self.BASE_URL}/{endpoint}"
+        payload = json.dumps({
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": method,
+            "params": params or {}
+        }).encode("utf-8")
+
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "secret-key": self.api_key,
         }
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+
+        req = urllib.request.Request(
+            self.MCP_URL, data=payload, headers=headers, method="POST"
+        )
+
+        self._last_request_time = time.time()
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API 请求失败: {e}")
-            raise
-    
-    def get_reviews(self, asin: str, site: str = "amazon.com", max_reviews: int = 100) -> List[str]:
-        """
-        获取 ASIN 的评论列表（1-3 星）
-        
-        注意：卖家精灵 API 可能不直接提供评论内容，此方法会尝试多个端点。
-        如果无法获取，返回空列表，由上层逻辑提示用户手动粘贴。
-        """
-        reviews = []
-        
-        # 尝试获取评论（根据卖家精灵实际 API 调整）
-        # 这里使用通用参数，实际端点需参考官方文档
-        params = {
-            "asin": asin,
-            "site": site,
-            "star_rating": "1,2,3",  # 1-3 星
-            "page_size": min(max_reviews, 100),
-            "page": 1
-        }
-        
-        try:
-            # 尝试评论列表接口（需根据实际 API 文档调整）
-            data = self._request("review/list", params)
-            if data and "data" in data and "reviews" in data["data"]:
-                for review in data["data"]["reviews"]:
-                    if "content" in review:
-                        reviews.append(review["content"])
-                    elif "text" in review:
-                        reviews.append(review["text"])
-                
-                # 分页处理
-                total_pages = data["data"].get("total_pages", 1)
-                for page in range(2, total_pages + 1):
-                    if len(reviews) >= max_reviews:
-                        break
-                    params["page"] = page
-                    page_data = self._request("review/list", params)
-                    if page_data and "data" in page_data and "reviews" in page_data["data"]:
-                        for review in page_data["data"]["reviews"]:
-                            if len(reviews) >= max_reviews:
-                                break
-                            if "content" in review:
-                                reviews.append(review["content"])
-                            elif "text" in review:
-                                reviews.append(review["text"])
-        except Exception as e:
-            logger.warning(f"获取评论失败（可能 API 不支持直接获取评论）: {e}")
-            # 不抛出异常，返回空列表让上层处理
-        
-        return reviews[:max_reviews]
-    
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                sid = resp.headers.get("Mcp-Session-Id")
+                if sid:
+                    self._session_id = sid
+                body = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            raise ConnectionError(f"MCP 请求失败 [{e.code}]: {err_body}") from e
+
+        if "error" in body:
+            err = body["error"]
+            raise ConnectionError(f"MCP 错误 [{err.get('code')}]: {err.get('message')}")
+
+        return body.get("result", body)
+
+    def initialize(self) -> dict:
+        """MCP 握手 — 获取服务端能力和 session"""
+        result = self._rpc_call("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "amazon-review-insight",
+                "version": "1.0.0"
+            }
+        })
+        self._rpc_call("notifications/initialized", {})
+        return result
+
+    def discover_tools(self) -> List[dict]:
+        """发现可用工具列表"""
+        result = self._rpc_call("tools/list", {})
+        tools = result.get("tools", [])
+        for tool in tools:
+            self._tools[tool["name"]] = tool
+        return tools
+
+    def call_tool(self, name: str, arguments: dict) -> Any:
+        """调用 MCP 工具"""
+        result = self._rpc_call("tools/call", {
+            "name": name,
+            "arguments": arguments
+        })
+        content = result.get("content", [])
+        texts = []
+        for item in content:
+            if item.get("type") == "text":
+                texts.append(item["text"])
+            elif item.get("type") == "resource":
+                texts.append(json.dumps(item.get("resource", {}), ensure_ascii=False))
+        return "\n".join(texts) if texts else result
+
+    def list_tool_names(self) -> List[str]:
+        return list(self._tools.keys())
+
     def get_product_info(self, asin: str, site: str = "amazon.com") -> Optional[dict]:
-        """获取产品基本信息（备用）"""
-        params = {
-            "asin": asin,
-            "site": site
-        }
-        try:
-            data = self._request("product/detail", params)
-            if data and "data" in data:
-                return data["data"]
-        except Exception as e:
-            logger.warning(f"获取产品信息失败: {e}")
-        return None
-    
+        """获取产品详情（自动匹配 MCP 工具）"""
+        candidates = ["get_asin_info", "product_info", "product_detail",
+                       "asin_detail", "get_product", "asin_info"]
+
+        for name in candidates:
+            if name in self._tools:
+                raw = self.call_tool(name, {"asin": asin, "site": site})
+                return self._parse_json(raw)
+
+        available = self.list_tool_names()
+        logger.warning(f"未找到产品详情工具，可用工具: {available}")
+        return {"error": "no_matching_tool", "available_tools": available}
+
+    def get_reviews(self, asin: str, site: str = "amazon.com",
+                    max_reviews: int = 100) -> List[str]:
+        """获取评论列表（自动匹配 MCP 工具）"""
+        candidates = ["get_reviews", "review_list", "product_reviews",
+                       "asin_reviews", "get_product_reviews"]
+
+        for name in candidates:
+            if name in self._tools:
+                raw = self.call_tool(name, {
+                    "asin": asin,
+                    "site": site,
+                    "star_rating": "1,2,3",
+                    "page_size": min(max_reviews, 100),
+                })
+                return self._parse_reviews(raw)
+
+        available = self.list_tool_names()
+        logger.warning(f"未找到评论工具，可用工具: {available}")
+        return []
+
     def get_keyword_data(self, asin: str, site: str = "amazon.com") -> Optional[dict]:
-        """获取关键词数据（备用）"""
-        params = {
-            "asin": asin,
-            "site": site
-        }
-        try:
-            data = self._request("keyword/asin", params)
-            if data and "data" in data:
-                return data["data"]
-        except Exception as e:
-            logger.warning(f"获取关键词数据失败: {e}")
+        """获取关键词数据"""
+        candidates = ["keyword_research", "keyword_asin", "asin_keywords",
+                       "traffic_keyword", "keyword_analysis"]
+
+        for name in candidates:
+            if name in self._tools:
+                raw = self.call_tool(name, {"asin": asin, "site": site})
+                return self._parse_json(raw)
+
         return None
+
+    @staticmethod
+    def _parse_json(raw: str) -> dict:
+        if isinstance(raw, dict):
+            return raw
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {"raw": raw}
+
+    @staticmethod
+    def _parse_reviews(raw: str) -> List[str]:
+        data = SellerspriteClient._parse_json(raw)
+        if isinstance(data, list):
+            return data if all(isinstance(i, str) for i in data) else [
+                str(i) for i in data
+            ]
+        if isinstance(data, dict):
+            for key in ("reviews", "items", "data", "list"):
+                if key in data and isinstance(data[key], list):
+                    items = data[key]
+                    return [
+                        item.get("content") or item.get("text") or item.get("body") or str(item)
+                        for item in items
+                    ]
+        if isinstance(raw, str):
+            return [raw]
+        return []
